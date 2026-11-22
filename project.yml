@@ -20,7 +20,7 @@ targets:
           NSAllowsArbitraryLoads: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.gamebrowser
+        PRODUCT_BUNDLE_IDENTIFIER: com.browser.kitsu
         PRODUCT_NAME: Kitsu
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_VERSION: "5.0"
