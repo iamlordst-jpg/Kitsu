@@ -7,6 +7,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Make app icon
+        run: python3 make_icon.py
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate project
@@ -16,9 +18,9 @@ jobs:
       - name: Package IPA
         run: |
           mkdir Payload
-          cp -R build/Build/Products/Release-iphoneos/GameBrowser.app Payload/
-          zip -r GameBrowser.ipa Payload
+          cp -R build/Build/Products/Release-iphoneos/Kitsu.app Payload/
+          zip -r Kitsu.ipa Payload
       - uses: actions/upload-artifact@v4
         with:
-          name: GameBrowser-ipa
-          path: GameBrowser.ipa
+          name: Kitsu-ipa
+          path: Kitsu.ipa
