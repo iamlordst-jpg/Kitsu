@@ -10,7 +10,7 @@ targets:
     info:
       path: GameBrowser/Info.plist
       properties:
-        CFBundleDisplayName: Game Browser
+        CFBundleDisplayName: Kitsu
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -21,5 +21,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.gamebrowser
+        PRODUCT_NAME: Kitsu
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
