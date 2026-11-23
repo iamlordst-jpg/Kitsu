@@ -102,8 +102,7 @@ final class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDeleg
         try? FileManager.default.createDirectory(at: Self.docsDir, withIntermediateDirectories: true)
         loadState()
         let cfg = URLSessionConfiguration.background(withIdentifier: "com.browser.kitsu.downloads")
-        let conns = UserDefaults.standard.integer(forKey: "dlConnections")
-        cfg.httpMaximumConnectionsPerHost = conns > 0 ? conns : 16
+        cfg.httpMaximumConnectionsPerHost = 64   // the real limit is enforced in ensureTasks, so it can change live
         cfg.sessionSendsLaunchEvents = true
         cfg.isDiscretionary = false
         cfg.timeoutIntervalForRequest = 60
@@ -221,11 +220,18 @@ final class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDeleg
         return min(m.chunkSize, m.total - start)
     }
 
+    // Keeps at most `dlConnections` parts in flight for this download. Called whenever a part finishes,
+    // so changing the setting takes effect on the next part that starts.
     private func ensureTasks(_ id: String) {
-        guard let m = metas[id], m.status == "downloading" || m.status == "paused",
+        guard let m = metas[id], m.status == "downloading",
               let url = URL(string: m.url) else { return }
+        let stored = UserDefaults.standard.integer(forKey: "dlConnections")
+        let limit = stored > 0 ? stored : 16
+        var slots = limit - live.keys.filter { $0.hasPrefix(id + "|") }.count
+        if slots <= 0 { return }
         let have = Set(m.downloaded)
         for idx in 0..<m.chunkCount where !have.contains(idx) {
+            if slots <= 0 { break }
             let key = id + "|" + String(idx)
             if live[key] != nil { continue }
             var req = URLRequest(url: url)
@@ -239,7 +245,8 @@ final class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDeleg
             let t = session.downloadTask(with: req)
             t.taskDescription = key
             live[key] = t
-            if m.status == "downloading" { t.resume() }   // new tasks start suspended
+            t.resume()   // new tasks start suspended
+            slots -= 1
         }
     }
 
@@ -314,7 +321,7 @@ final class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDeleg
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let desc = task.taskDescription, let (id, _) = Self.parse(desc) else { return }
         live[desc] = nil
-        guard let error = error else { return }
+        guard let error = error else { ensureTasks(id); return }   // a slot freed up: start the next part
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return }
         guard let m = metas[id], m.status == "downloading" || m.status == "paused" else { return }
@@ -564,7 +571,7 @@ struct DownloadsView: View {
                     HStack {
                         TextField("Paste a file URL", text: $newURL)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
-                            .keyboardType(.URL)
+                            .keyboardType(.default)
                         Button("Add") {
                             let t = newURL.trimmingCharacters(in: .whitespacesAndNewlines)
                             if let u = URL(string: t), u.scheme?.hasPrefix("http") == true {
