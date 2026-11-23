@@ -152,17 +152,22 @@ final class BrowserModel: NSObject, ObservableObject, WKNavigationDelegate, WKUI
     @Published var urlText = ""
     @Published var crashCount = 0
     @Published var crashLoop = false
+    @Published var canGoBack = false
+    @Published var canGoForward = false
+    @Published var progress: Double = 0
+    @Published var isLoading = false
     @Published var sheet: Sheet?
     @Published var fullscreen = false {
         didSet {
             applyOrientation()
-            UIApplication.shared.isIdleTimerDisabled = fullscreen      // keep the screen on while playing
+            UIApplication.shared.isIdleTimerDisabled = fullscreen && keepAwake
             webView.allowsBackForwardNavigationGestures = !fullscreen  // no accidental back-swipes in games
         }
     }
 
     @AppStorage("desktopMode") var desktopMode = false
     @AppStorage("lockLandscape") var lockLandscape = true
+    @AppStorage("keepAwake") var keepAwake = true
     @AppStorage("blockAds") var blockAds = true
     @AppStorage("blockPopups") var blockPopups = true
     @AppStorage("autoDownloads") var autoDownloads = true
@@ -171,6 +176,7 @@ final class BrowserModel: NSObject, ObservableObject, WKNavigationDelegate, WKUI
     private(set) var lastURL: URL?
     private(set) var adList: WKContentRuleList?
     private var crashTimes: [Date] = []
+    private var observers: [NSKeyValueObservation] = []
     private(set) lazy var webView: WKWebView = makeWebView()
 
     override init() {
@@ -217,6 +223,20 @@ final class BrowserModel: NSObject, ObservableObject, WKNavigationDelegate, WKUI
         wv.scrollView.bounces = false
         wv.scrollView.contentInsetAdjustmentBehavior = .never
         if #available(iOS 16.4, *) { wv.isInspectable = true }
+        observers = [
+            wv.observe(\.canGoBack) { [weak self] w, _ in
+                DispatchQueue.main.async { self?.canGoBack = w.canGoBack }
+            },
+            wv.observe(\.canGoForward) { [weak self] w, _ in
+                DispatchQueue.main.async { self?.canGoForward = w.canGoForward }
+            },
+            wv.observe(\.estimatedProgress) { [weak self] w, _ in
+                DispatchQueue.main.async {
+                    self?.progress = w.estimatedProgress
+                    self?.isLoading = w.estimatedProgress < 1
+                }
+            }
+        ]
         return wv
     }
 
@@ -438,6 +458,12 @@ final class BrowserModel: NSObject, ObservableObject, WKNavigationDelegate, WKUI
         DownloadManager.shared.toast("Bookmarked")
     }
 
+    func copyLink() {
+        guard let u = webView.url else { return }
+        UIPasteboard.general.string = u.absoluteString
+        DownloadManager.shared.toast("Link copied")
+    }
+
     func clearSiteData() {
         let store = WKWebsiteDataStore.default()
         store.fetchDataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes()) { recs in
@@ -457,6 +483,8 @@ struct WebContainer: UIViewRepresentable {
 struct ContentView: View {
     @StateObject private var m = BrowserModel()
     @ObservedObject private var dl = DownloadManager.shared
+    @State private var showExit = false
+    @State private var exitToken = 0
 
     private var activeDownloads: Int { dl.rows.filter { $0.status == "downloading" }.count }
 
@@ -464,17 +492,16 @@ struct ContentView: View {
         ZStack(alignment: .topTrailing) {
             (m.fullscreen ? Color.black : Color(.systemBackground)).ignoresSafeArea()
             VStack(spacing: 0) {
-                if !m.fullscreen { toolbar }
+                if !m.fullscreen {
+                    toolbar
+                    if m.isLoading { ProgressView(value: m.progress).progressViewStyle(.linear) }
+                }
                 WebContainer(model: m)
             }
             if m.fullscreen {
-                Button { m.exitFullscreen() } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title).foregroundColor(.white).padding(12)
-                }
-                .opacity(0.35)
-                .padding(.top, 8)
-                .padding(.trailing, 40)
+                exitControl
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 6)
             }
             if m.crashLoop { crashOverlay }
         }
@@ -489,6 +516,9 @@ struct ContentView: View {
             }
         }
         .ignoresSafeArea(.container, edges: m.fullscreen ? .all : [])
+        .onChange(of: m.fullscreen) { on in
+            if on { revealExit() } else { showExit = false }
+        }
         .statusBarHidden(m.fullscreen)
         .persistentSystemOverlays(m.fullscreen ? .hidden : .automatic)
         .sheet(item: $m.sheet) { s in
@@ -500,11 +530,40 @@ struct ContentView: View {
         }
     }
 
+    // No button sits on the game. The X shows for 3 seconds after entering fullscreen, then hides.
+    // Tap the invisible handle at the top center to show it again.
+    @ViewBuilder private var exitControl: some View {
+        if showExit {
+            Button { m.exitFullscreen() } label: {
+                Image(systemName: "xmark")
+                    .font(.headline.weight(.bold)).foregroundColor(.white)
+                    .frame(width: 44, height: 44)
+                    .background(Color.black.opacity(0.65), in: Circle())
+            }
+        } else {
+            Color.clear
+                .frame(width: 90, height: 26)
+                .contentShape(Rectangle())
+                .onTapGesture { revealExit() }
+        }
+    }
+
+    private func revealExit() {
+        showExit = true
+        exitToken += 1
+        let token = exitToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            if exitToken == token { showExit = false }
+        }
+    }
+
     private var toolbar: some View {
         HStack(spacing: 10) {
+            Button { m.webView.goBack() } label: { Image(systemName: "chevron.left") }
+                .disabled(!m.canGoBack)
             TextField("Search or enter URL", text: $m.urlText)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
-                .keyboardType(.URL).submitLabel(.go).onSubmit { m.go() }
+                .keyboardType(.default).submitLabel(.go).onSubmit { m.go() }
                 .padding(8).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
             Button { m.webView.reload() } label: { Image(systemName: "arrow.clockwise") }
             Button { m.enterFullscreen() } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
@@ -520,6 +579,12 @@ struct ContentView: View {
                     }
             }
             Menu {
+                Button { m.webView.goForward() } label: { Label("Forward", systemImage: "chevron.right") }
+                    .disabled(!m.canGoForward)
+                Button { m.desktopMode.toggle(); m.webView.reload() } label: {
+                    Label(m.desktopMode ? "Switch to mobile site" : "Switch to desktop site", systemImage: "desktopcomputer")
+                }
+                Button { m.copyLink() } label: { Label("Copy page link", systemImage: "link") }
                 Button { m.sheet = .bookmarks } label: { Label("Bookmarks", systemImage: "book") }
                 Button { m.addBookmark() } label: { Label("Bookmark this page", systemImage: "star") }
                 Button { m.sheet = .settings } label: { Label("Settings", systemImage: "gearshape") }
@@ -586,6 +651,7 @@ struct SettingsView: View {
                 }
                 Section(footer: Text("Rotates to landscape when a game goes fullscreen.")) {
                     Toggle("Lock landscape in fullscreen", isOn: m.$lockLandscape)
+                    Toggle("Keep screen on in fullscreen", isOn: m.$keepAwake)
                 }
                 Section(header: Text("Browsing"),
                         footer: Text("Blocking ads and script popups uses less memory and stops ads from hijacking a game page.")) {
@@ -594,8 +660,8 @@ struct SettingsView: View {
                     Toggle("Send file downloads to Kitsu", isOn: m.$autoDownloads)
                 }
                 Section(header: Text("Downloads"),
-                        footer: Text("More connections can be faster on servers that limit each connection. Restart the app to apply a change.")) {
-                    Stepper("Connections per download: \(conns)", value: $conns, in: 4...32)
+                        footer: Text("More connections can be faster on servers that limit each connection, but some servers block too many. A change applies to the next parts that start.")) {
+                    Stepper("Connections per download: \(conns)", value: $conns, in: 4...64)
                 }
                 Section("Stats") { Text("Page crashes recovered: \(m.crashCount)") }
                 Section { Button("Clear all site data", role: .destructive) { m.clearSiteData() } }
