@@ -1,6 +1,6 @@
 name: GameBrowser
 options:
-  bundleIdPrefix: com.example
+  bundleIdPrefix: com.browser
 targets:
   GameBrowser:
     type: application
@@ -12,6 +12,8 @@ targets:
       properties:
         CFBundleDisplayName: Kitsu
         UILaunchScreen: {}
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
