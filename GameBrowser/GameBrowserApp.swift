@@ -152,6 +152,7 @@ final class BrowserModel: NSObject, ObservableObject, WKNavigationDelegate, WKUI
     @Published var urlText = ""
     @Published var crashCount = 0
     @Published var crashLoop = false
+    @Published var hasPage = false   // false = show the welcome screen
     @Published var canGoBack = false
     @Published var canGoForward = false
     @Published var progress: Double = 0
@@ -408,9 +409,16 @@ final class BrowserModel: NSObject, ObservableObject, WKNavigationDelegate, WKUI
         if let u = webView.url ?? lastURL { webView.load(URLRequest(url: u)) }
     }
 
+    func goHome() {
+        urlText = ""
+        hasPage = false
+        webView.load(URLRequest(url: URL(string: "about:blank")!))
+    }
+
     func closeAfterCrash() {
         crashLoop = false
         crashTimes = []
+        hasPage = false
         urlText = ""
         webView.load(URLRequest(url: URL(string: "about:blank")!))
     }
@@ -418,7 +426,9 @@ final class BrowserModel: NSObject, ObservableObject, WKNavigationDelegate, WKUI
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         DispatchQueue.main.async {
             if let u = webView.url {
-                if u.scheme == "http" || u.scheme == "https" { self.lastURL = u; self.urlText = u.absoluteString }
+                let web = u.scheme == "http" || u.scheme == "https"
+                self.hasPage = web
+                if web { self.lastURL = u; self.urlText = u.absoluteString }
             }
             if self.fullscreen { self.fullscreen = false }
         }
@@ -496,7 +506,10 @@ struct ContentView: View {
                     toolbar
                     if m.isLoading { ProgressView(value: m.progress).progressViewStyle(.linear) }
                 }
-                WebContainer(model: m)
+                ZStack {
+                    WebContainer(model: m)
+                    if !m.hasPage { StartView(m: m) }
+                }
             }
             if m.fullscreen {
                 exitControl
@@ -567,6 +580,7 @@ struct ContentView: View {
                 .padding(8).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
             Button { m.webView.reload() } label: { Image(systemName: "arrow.clockwise") }
             Button { m.enterFullscreen() } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
+                .disabled(!m.hasPage)
             Button { m.sheet = .downloads } label: {
                 Image(systemName: "arrow.down.circle")
                     .overlay(alignment: .topTrailing) {
@@ -579,6 +593,7 @@ struct ContentView: View {
                     }
             }
             Menu {
+                Button { m.goHome() } label: { Label("Home", systemImage: "house") }
                 Button { m.webView.goForward() } label: { Label("Forward", systemImage: "chevron.right") }
                     .disabled(!m.canGoForward)
                 Button { m.desktopMode.toggle(); m.webView.reload() } label: {
@@ -669,5 +684,85 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .onChange(of: m.blockAds) { _ in m.applyAdBlock() }
         }
+    }
+}
+
+
+// MARK: - Welcome screen
+
+struct StartView: View {
+    @ObservedObject var m: BrowserModel
+
+    private let indigo = Color(red: 0.31, green: 0.27, blue: 0.90)
+    private let pink = Color(red: 0.93, green: 0.28, blue: 0.60)
+
+    private func tile(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: icon).font(.title2).foregroundColor(indigo)
+                Text(title).font(.caption).foregroundColor(.primary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 22) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        .fill(LinearGradient(colors: [indigo, pink], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    Circle().fill(Color.white).frame(width: 58, height: 58)
+                    Image(systemName: "play.fill").font(.title2).foregroundColor(indigo)
+                }
+                .frame(width: 96, height: 96)
+                .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 4)
+                .padding(.top, 30)
+
+                VStack(spacing: 6) {
+                    Text("Welcome to Kitsu").font(.largeTitle.bold())
+                    Text("Play web games and download files fast.").foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                HStack(spacing: 12) {
+                    tile("Bookmarks", "book.fill") { m.sheet = .bookmarks }
+                    tile("Downloads", "arrow.down.circle.fill") { m.sheet = .downloads }
+                    tile("Settings", "gearshape.fill") { m.sheet = .settings }
+                }
+
+                if m.bookmarks.isEmpty {
+                    Text("Type a game's address or a search in the bar above to get started. Use the ••• menu to bookmark pages you want back here.")
+                        .font(.footnote).foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 8)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Your bookmarks").font(.headline)
+                        ForEach(m.bookmarks.prefix(6)) { b in
+                            Button { m.open(b.url) } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "star.fill").foregroundColor(.yellow)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(b.title).lineLimit(1).foregroundColor(.primary)
+                                        Text(b.url).font(.caption).foregroundColor(.secondary).lineLimit(1)
+                                    }
+                                    Spacer()
+                                }
+                                .padding(12)
+                                .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .padding(24)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
     }
 }
