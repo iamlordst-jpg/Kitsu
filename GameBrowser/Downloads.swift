@@ -274,7 +274,11 @@ final class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDeleg
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
-        guard let (id, idx) = Self.parse(downloadTask.taskDescription) else { return }
+        guard let (id, idx) = Self.parse(downloadTask.taskDescription), let m = metas[id] else { return }
+        if m.downloaded.contains(idx) {
+            downloadTask.cancel()   // we already have this part: don't download it again
+            return
+        }
         partial[id, default: [:]][idx] = totalBytesWritten
     }
 
@@ -319,8 +323,9 @@ final class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDeleg
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let desc = task.taskDescription, let (id, _) = Self.parse(desc) else { return }
+        guard let desc = task.taskDescription, let (id, idx) = Self.parse(desc) else { return }
         live[desc] = nil
+        partial[id]?[idx] = nil
         guard let error = error else { ensureTasks(id); return }   // a slot freed up: start the next part
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return }
@@ -484,7 +489,10 @@ final class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDeleg
         if m.status == "done" { return max(m.total, 0) }
         var s: Int64 = 0
         for i in m.downloaded { s += chunkLength(m, i) }
-        for (i, b) in partial[m.id] ?? [:] where !m.downloaded.contains(i) { s += b }
+        for (i, b) in partial[m.id] ?? [:] where !m.downloaded.contains(i) {
+            s += (m.ranged && m.total > 0) ? min(b, chunkLength(m, i)) : b
+        }
+        if m.total > 0 { s = min(s, m.total) }
         return s
     }
 
@@ -663,3 +671,4 @@ struct DownloadRowView: View {
         .padding(.vertical, 4)
     }
 }
+
